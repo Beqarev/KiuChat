@@ -1,0 +1,397 @@
+﻿@page "/"
+@rendermode InteractiveServer
+@using Microsoft.AspNetCore.SignalR.Client
+@inject NavigationManager Navigation
+@implements IAsyncDisposable
+
+<PageTitle>KiuChat - Anonymous Campus Chat</PageTitle>
+
+<h1 class="app-title">KiuChat</h1>
+
+@if (!_isRegistered && !_isWaiting && !_isChatting)
+{
+    <div class="content-box nickname-entry">
+        <label for="nickname">Enter your Nickname:</label>
+        <input id="nickname" type="text" @bind="_nicknameInput" @bind:event="oninput" @onkeyup="HandleNicknameKeyup" placeholder="..."/>
+        <button @onclick="RegisterAndStartChat" disabled="@(string.IsNullOrWhiteSpace(_nicknameInput) || _isConnecting)">
+            @(_isConnecting ? "Connecting..." : "Start Chatting")
+        </button>
+        @if (!string.IsNullOrWhiteSpace(_errorMessage))
+        {
+            <p class="error-message">@_errorMessage</p>
+        }
+    </div>
+}
+
+
+@if (_isWaiting)
+{
+    <div class="content-box waiting-message">
+        <p>Welcome, @_userNickname!</p>
+        <div class="spinner"></div>
+        <p>Waiting for a chat partner...</p>
+
+       
+        <button @onclick="StopWaitingAsync" class="stop-waiting-button">
+            Stop Waiting
+        </button>
+
+        @if (!string.IsNullOrWhiteSpace(_errorMessage))
+        {
+            <p class="error-message">@_errorMessage</p>
+        }
+    </div>
+}
+
+@if (_isChatting)
+{
+    <div class="content-box chat-container">
+        <div class="chat-info">
+            You are chatting with: <strong>@_partnerNickname</strong>
+        </div>
+        <div class="message-area" id="messageArea">
+            <ul>
+                @foreach (var msg in _messages)
+                {
+                    <li class="@(msg.IsSystem ? "system-message" : (msg.IsMine ? "my-message" : "partner-message"))">
+                        <div class="message-bubble">
+                            @if (msg.IsSystem)
+                            {
+                                <em>@msg.Text</em>
+                            }
+                            else
+                            {
+                                @msg.Text
+                            }
+                        </div>
+                    </li>
+                }
+            </ul>
+        </div>
+        <div class="input-area">
+            <input type="text" @bind="_messageInput" @bind:event="oninput" @onkeyup="HandleChatKeyup" placeholder="Type your message..." disabled="@(!_isChatting || _hubConnection?.State != HubConnectionState.Connected)"/>
+            <button @onclick="SendMessageAsync" disabled="@(string.IsNullOrWhiteSpace(_messageInput) || !_isChatting || _hubConnection?.State != HubConnectionState.Connected)">Send</button>
+        </div>
+        @if (!string.IsNullOrWhiteSpace(_errorMessage))
+        {
+            <p class="error-message">@_errorMessage</p>
+        }
+        <button @onclick="LeaveChatAsync" class="leave-button" disabled="@(!_isChatting)">Leave Chat</button>
+    </div>
+}
+
+
+@code {
+    
+    private string? _nicknameInput;
+    private string? _userNickname;
+    private string? _partnerNickname;
+    private string? _messageInput;
+    private string? _errorMessage;
+
+    private bool _isRegistered = false;
+    private bool _isWaiting = false;
+    private bool _isChatting = false;
+    private bool _isConnecting = false;
+
+    private HubConnection? _hubConnection;
+    private List<ChatMessage> _messages = new List<ChatMessage>();
+
+    private record ChatMessage(string Text, bool IsMine, bool IsSystem = false);
+    
+    protected override async Task OnInitializedAsync()
+    {
+        _hubConnection = new HubConnectionBuilder()
+            .WithUrl(Navigation.ToAbsoluteUri("/chathub"))
+            .WithAutomaticReconnect()
+            .Build();
+        
+        _hubConnection.On("WaitingForPartner", () =>
+        {
+            InvokeAsync(() =>
+            {
+                _isWaiting = true;
+                _isChatting = false;
+                _isConnecting = false;
+                _errorMessage = null;
+                if (!_messages.Any(m => m.IsSystem && m.Text.Contains("Waiting for a partner")))
+                {
+                    _messages.Clear();
+                    _messages.Add(new ChatMessage($"Welcome, {_userNickname}! Waiting for a partner...", false, true));
+                }
+
+                StateHasChanged();
+                Console.WriteLine("Client state: WaitingForPartner");
+            });
+        });
+
+        _hubConnection.On<string>("PartnerFound", (partnerNick) =>
+        {
+            InvokeAsync(() =>
+            {
+                _partnerNickname = partnerNick;
+                _isWaiting = false;
+                _isChatting = true;
+                _isConnecting = false;
+                _messages.Clear();
+                _messages.Add(new ChatMessage($"You are now chatting with {_partnerNickname}!", false, true));
+                _errorMessage = null;
+                StateHasChanged();
+                Console.WriteLine($"Client state: PartnerFound - {_partnerNickname}");
+            });
+        });
+
+        _hubConnection.On<string>("ReceiveMessage", (message) =>
+        {
+            InvokeAsync(() =>
+            {
+                _messages.Add(new ChatMessage(message, false));
+                StateHasChanged();
+                Console.WriteLine($"Client state: ReceiveMessage - {message}");
+            });
+        });
+
+        _hubConnection.On("PartnerLeft", () =>
+        {
+            InvokeAsync(async () =>
+            {
+                _messages.Add(new ChatMessage($"{_partnerNickname ?? "Your partner"} has left the chat. Finding a new partner...", false, true));
+                _partnerNickname = null;
+                _isChatting = false;
+                _isWaiting = true;
+                _errorMessage = null;
+                StateHasChanged();
+                Console.WriteLine("Client state: PartnerLeft");
+
+                if (_isRegistered && _hubConnection is not null && _hubConnection.State == HubConnectionState.Connected)
+                {
+                    Console.WriteLine("PartnerLeft: Attempting to re-register to find new partner...");
+                    try
+                    {
+                        await _hubConnection.SendAsync("Register", _userNickname);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Error re-registering after partner left: {ex.Message}");
+                        _errorMessage = "Error finding new partner. You may need to refresh.";
+                        _isWaiting = false;
+                        _isRegistered = false;
+                        StateHasChanged();
+                    }
+                }
+            });
+        });
+        
+        _hubConnection.Reconnecting += (error) =>
+        {
+            Console.WriteLine($"SignalR connection reconnecting: {error?.Message}");
+            InvokeAsync(() =>
+            {
+                _errorMessage = "Connection lost. Trying to reconnect...";
+                StateHasChanged();
+            });
+            return Task.CompletedTask;
+        };
+
+        _hubConnection.Reconnected += (connectionId) =>
+        {
+            Console.WriteLine($"SignalR connection reconnected with ID: {connectionId}");
+            InvokeAsync(async () =>
+            {
+                _errorMessage = null;
+                if (_isRegistered && _hubConnection is not null && _hubConnection.State == HubConnectionState.Connected)
+                {
+                    Console.WriteLine("Attempting to re-register after reconnect...");
+                    try
+                    {
+                        await _hubConnection.SendAsync("Register", _userNickname);
+                        _errorMessage = "Re-joining chat...";
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Error re-registering after reconnect: {ex.Message}");
+                        _errorMessage = "Reconnected, but failed to rejoin the chat. Please refresh.";
+                        _isRegistered = false;
+                        _isWaiting = false;
+                        _isChatting = false;
+                    }
+                }
+                else
+                {
+                    _errorMessage = "Reconnected. Please 'Start Chatting' again if needed.";
+                    _isRegistered = false;
+                    _isWaiting = false;
+                    _isChatting = false;
+                }
+
+                StateHasChanged();
+            });
+            return Task.CompletedTask;
+        };
+
+        _hubConnection.Closed += (error) =>
+        {
+            Console.WriteLine($"SignalR connection closed: {error?.Message}");
+            InvokeAsync(() =>
+            {
+                _errorMessage = "Connection closed. Please 'Start Chatting' again if needed.";
+                _isRegistered = false;
+                _isWaiting = false;
+                _isChatting = false;
+                _isConnecting = false;
+                StateHasChanged();
+            });
+            return Task.CompletedTask;
+        };
+    }
+
+    private async Task HandleNicknameKeyup(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(_nicknameInput) && !_isConnecting)
+        {
+            await RegisterAndStartChat();
+        }
+    }
+
+    private async Task HandleChatKeyup(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(_messageInput) && _isChatting)
+        {
+            await SendMessageAsync();
+        }
+    }
+
+    private async Task RegisterAndStartChat()
+    {
+        if (string.IsNullOrWhiteSpace(_nicknameInput) || _hubConnection == null || _isConnecting)
+        {
+            _errorMessage = "Nickname cannot be empty.";
+            return;
+        }
+
+        _isConnecting = true;
+        _errorMessage = null;
+        await InvokeAsync(StateHasChanged);
+        if (_hubConnection.State == HubConnectionState.Disconnected)
+        {
+            try
+            {
+                Console.WriteLine("Starting SignalR connection...");
+                await _hubConnection.StartAsync();
+                Console.WriteLine("SignalR connection started.");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error starting connection: {ex.Message}");
+                _errorMessage = $"Could not connect to chat service: {ex.Message}";
+                _isConnecting = false;
+                _isRegistered = false;
+                await InvokeAsync(StateHasChanged);
+                return;
+            }
+        }
+
+        if (_hubConnection.State == HubConnectionState.Connected)
+        {
+            try
+            {
+                _userNickname = _nicknameInput;
+                _isRegistered = true;
+                await _hubConnection.SendAsync("Register", _userNickname);
+                Console.WriteLine($"Sent Register command for: {_userNickname}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error sending Register command: {ex.Message}");
+                _errorMessage = $"Error registering with chat service: {ex.Message}";
+                _isConnecting = false;
+                _isRegistered = false;
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        else
+        {
+            Console.WriteLine($"Connection state is not Connected after attempting start: {_hubConnection.State}");
+            _errorMessage = "Failed to establish connection. Please try again.";
+            _isConnecting = false;
+            _isRegistered = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task SendMessageAsync()
+    {
+        if (!string.IsNullOrWhiteSpace(_messageInput) && _hubConnection != null && _isChatting && _hubConnection.State == HubConnectionState.Connected)
+        {
+            var messageToSend = _messageInput;
+            _messageInput = string.Empty;
+            try
+            {
+                _messages.Add(new ChatMessage(messageToSend, true));
+                await InvokeAsync(StateHasChanged);
+                await _hubConnection.SendAsync("SendMessage", messageToSend);
+                Console.WriteLine("Sent message.");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error sending message: {ex.Message}");
+                _errorMessage = $"Error sending message: {ex.Message}";
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+    }
+
+    private async Task LeaveChatAsync()
+    {
+        if (_hubConnection != null && (_isChatting || _isWaiting))
+        {
+            var previousState = _hubConnection.State;
+            Console.WriteLine("User initiated Leave Chat / Stop Waiting.");
+            await _hubConnection.StopAsync();
+            await InvokeAsync(() =>
+            {
+                _messages.Add(new ChatMessage("You left the chat.", false, true));
+                _isChatting = false;
+                _isWaiting = false;
+                _isRegistered = false;
+                _isConnecting = false;
+                _partnerNickname = null;
+                _nicknameInput = _userNickname;
+                _errorMessage = "You have left the chat.";
+                StateHasChanged();
+            });
+        }
+    }
+    
+    private async Task StopWaitingAsync()
+    {
+        Console.WriteLine("User initiated Stop Waiting.");
+        if (_hubConnection != null && (_hubConnection.State == HubConnectionState.Connected || _hubConnection.State == HubConnectionState.Connecting))
+        {
+            await _hubConnection.StopAsync();
+            Console.WriteLine("SignalR connection stopped by user.");
+        }
+        await InvokeAsync(() =>
+        {
+            _isWaiting = false;
+            _isRegistered = false; 
+            _isConnecting = false;
+            _errorMessage = "Search cancelled."; 
+            _nicknameInput = _userNickname;
+            StateHasChanged();
+        });
+    }
+
+    
+    public async ValueTask DisposeAsync()
+    {
+        Console.WriteLine("Disposing component and SignalR connection...");
+        if (_hubConnection is not null)
+        {
+            await _hubConnection.DisposeAsync();
+            _hubConnection = null;
+            Console.WriteLine("SignalR connection disposed.");
+        }
+    }
+
+}
