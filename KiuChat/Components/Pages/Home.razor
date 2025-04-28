@@ -12,7 +12,7 @@
 {
     <div class="content-box nickname-entry">
         <label for="nickname">Enter your Nickname:</label>
-        <input id="nickname" type="text" @bind="_nicknameInput" @bind:event="oninput" @onkeyup="HandleNicknameKeyup" placeholder="..."/>
+        <input id="nickname" type="text" @bind="_nicknameInput" @bind:event="oninput" @onkeyup="HandleNicknameKeyup" placeholder="Type your nickname..."/>
         <button @onclick="RegisterAndStartChat" disabled="@(string.IsNullOrWhiteSpace(_nicknameInput) || _isConnecting)">
             @(_isConnecting ? "Connecting..." : "Start Chatting")
         </button>
@@ -27,13 +27,12 @@
 @if (_isWaiting)
 {
     <div class="content-box waiting-message">
-        <p>Welcome, @_userNickname!</p>
+        <p>Welcome, <strong>@_userNickname</strong>!</p>
         <div class="spinner"></div>
         <p>Waiting for a chat partner...</p>
 
-       
         <button @onclick="StopWaitingAsync" class="stop-waiting-button">
-            Stop Waiting
+            Cancel
         </button>
 
         @if (!string.IsNullOrWhiteSpace(_errorMessage))
@@ -82,7 +81,7 @@
 
 
 @code {
-    
+
     private string? _nicknameInput;
     private string? _userNickname;
     private string? _partnerNickname;
@@ -98,14 +97,14 @@
     private List<ChatMessage> _messages = new List<ChatMessage>();
 
     private record ChatMessage(string Text, bool IsMine, bool IsSystem = false);
-    
+
     protected override async Task OnInitializedAsync()
     {
         _hubConnection = new HubConnectionBuilder()
             .WithUrl(Navigation.ToAbsoluteUri("/chathub"))
             .WithAutomaticReconnect()
             .Build();
-        
+
         _hubConnection.On("WaitingForPartner", () =>
         {
             InvokeAsync(() =>
@@ -181,7 +180,7 @@
                 }
             });
         });
-        
+
         _hubConnection.Reconnecting += (error) =>
         {
             Console.WriteLine($"SignalR connection reconnecting: {error?.Message}");
@@ -362,7 +361,7 @@
             });
         }
     }
-    
+
     private async Task StopWaitingAsync()
     {
         Console.WriteLine("User initiated Stop Waiting.");
@@ -371,18 +370,19 @@
             await _hubConnection.StopAsync();
             Console.WriteLine("SignalR connection stopped by user.");
         }
+
         await InvokeAsync(() =>
         {
             _isWaiting = false;
-            _isRegistered = false; 
+            _isRegistered = false;
             _isConnecting = false;
-            _errorMessage = "Search cancelled."; 
+            _errorMessage = "Search cancelled.";
             _nicknameInput = _userNickname;
             StateHasChanged();
         });
     }
 
-    
+
     public async ValueTask DisposeAsync()
     {
         Console.WriteLine("Disposing component and SignalR connection...");
