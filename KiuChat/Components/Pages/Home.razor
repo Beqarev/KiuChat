@@ -2,6 +2,7 @@
 @rendermode InteractiveServer
 @using Microsoft.AspNetCore.SignalR.Client
 @inject NavigationManager Navigation
+@inject IJSRuntime JS
 @implements IAsyncDisposable
 
 <PageTitle>KiuChat - Anonymous Campus Chat</PageTitle>
@@ -48,7 +49,7 @@
         <div class="chat-info">
             You are chatting with: <strong>@_partnerNickname</strong>
         </div>
-        <div class="message-area" id="messageArea">
+        <div class="message-area" id="messageArea" @ref="_messageAreaRef">
             <ul>
                 @foreach (var msg in _messages)
                 {
@@ -66,6 +67,7 @@
                     </li>
                 }
             </ul>
+            <div @ref="_messageEndRef"></div>
         </div>
         <div class="input-area">
             <input type="text" @bind="_messageInput" @bind:event="oninput" @onkeyup="HandleChatKeyup" placeholder="Type your message..." disabled="@(!_isChatting || _hubConnection?.State != HubConnectionState.Connected)"/>
@@ -75,7 +77,10 @@
         {
             <p class="error-message">@_errorMessage</p>
         }
-        <button @onclick="LeaveChatAsync" class="leave-button" disabled="@(!_isChatting)">Leave Chat</button>
+        <div class="leave-button-container">
+            <button @onclick="LeaveChatAsync" class="leave-button" disabled="@(!_isChatting)">Leave Chat</button>
+        </div>
+
     </div>
 }
 
@@ -97,6 +102,24 @@
     private List<ChatMessage> _messages = new List<ChatMessage>();
 
     private record ChatMessage(string Text, bool IsMine, bool IsSystem = false);
+
+    private ElementReference _messageEndRef;
+    private ElementReference _messageAreaRef;
+
+    private async Task ScrollToBottomAsync()
+    {
+        try
+        {
+
+            await Task.Delay(50);
+            await JS.InvokeVoidAsync("scrollToBottom", _messageAreaRef);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Scroll failed: {ex.Message}");
+        }
+    }
+
 
     protected override async Task OnInitializedAsync()
     {
@@ -133,7 +156,7 @@
                 _isChatting = true;
                 _isConnecting = false;
                 _messages.Clear();
-                _messages.Add(new ChatMessage($"You are now chatting with {_partnerNickname}!", false, true));
+                //_messages.Add(new ChatMessage($"You are now chatting with {_partnerNickname}!", false, true));
                 _errorMessage = null;
                 StateHasChanged();
                 Console.WriteLine($"Client state: PartnerFound - {_partnerNickname}");
@@ -142,10 +165,11 @@
 
         _hubConnection.On<string>("ReceiveMessage", (message) =>
         {
-            InvokeAsync(() =>
+            InvokeAsync(async () =>
             {
                 _messages.Add(new ChatMessage(message, false));
                 StateHasChanged();
+                await ScrollToBottomAsync();
                 Console.WriteLine($"Client state: ReceiveMessage - {message}");
             });
         });
@@ -328,6 +352,7 @@
             {
                 _messages.Add(new ChatMessage(messageToSend, true));
                 await InvokeAsync(StateHasChanged);
+                await ScrollToBottomAsync();
                 await _hubConnection.SendAsync("SendMessage", messageToSend);
                 Console.WriteLine("Sent message.");
             }

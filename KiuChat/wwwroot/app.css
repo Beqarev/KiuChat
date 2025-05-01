@@ -220,6 +220,7 @@ main {
     overflow-y: auto;
     overflow-x: hidden;
     padding: 1rem 1.5rem;
+    height: 400px;
     background-color: var(--white);
 }
 
@@ -372,7 +373,6 @@ main {
 }
 
 .leave-button {
-    margin: 1.2rem auto 0.5rem auto;
     padding: 0.7rem 1.8rem;
     background: #e53935;
     color: white;
@@ -464,4 +464,11 @@ main {
     .chat-container {
         height: 80vh;
     }
+}
+
+.leave-button-container {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 70px;
 }

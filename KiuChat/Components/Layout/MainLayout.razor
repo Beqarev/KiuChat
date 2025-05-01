@@ -15,3 +15,12 @@
     <a href="" class="reload">Reload</a>
     <a class="dismiss">🗙</a>
 </div>
+
+<script>
+    window.scrollToBottom = (element) => {
+        if (element){
+            element.scrollTop = element.scrollHeight;
+        }
+        //element?.scrollIntoView({ behavior: "smooth" });
+    };
+</script>
