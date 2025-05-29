@@ -11,7 +11,7 @@ This project was created to practice:
 ✅ Cloud deployment on **Google Cloud Platform (GCP)**  
 
 ### Try It Out  
-🌐 [Live Demo](#) *https://kiuchat-374314531996.europe-west3.run.app*  
+🌐 [Live Demo](#kiuchat.space) 
 
 ### Run Locally  
 ```bash
